@@ -1,3 +1,6 @@
+# datafiles that aren't public yet
+profile_fitter/datafiles/*npy
+
 # emacs backup files
 *~
 
