@@ -1,3 +1,6 @@
+*.png
+*.npy
+
 # datafiles that aren't public yet
 profile_fitter/datafiles/*npy
 

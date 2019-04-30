@@ -6,9 +6,11 @@ import emcee, os
 import aemulus_extras as ae
 import aemulus_data as ad
 
+method = "Nelder-Mead"
+
 class SingleSnapshotFitter(object):
 
-    def __init__(self, box, snapshot):
+    def __init__(self, box, snapshot, fit_in_log=True):
         self.box = box
         self.snapshot = snapshot
         self.data_dict = {}
@@ -25,6 +27,7 @@ class SingleSnapshotFitter(object):
         self.cosmology = cosmology
         self.h = cosmology[5]/100.
         self.Omega_m = cosmology[1]/self.h**2
+        self.fit_in_log = fit_in_log
 
     def setup_fitting_args(self, mass_index):
         M = self.data_dict["masses"][mass_index]
@@ -42,11 +45,10 @@ class SingleSnapshotFitter(object):
         xi_nl_spl = interp.InterpolatedUnivariateSpline(r_extra, xi_nl_extra)
         xi_nl = xi_nl_spl(r) #xi_nl evaluated at our data
 
+        #xi_nl = Extra.xi_mm[self.snapshot]
+        
         Marr = Extra.M
-        nu = Extra.nu[self.snapshot]
         lnMarr = np.log(Marr)
-        nu_lnM_spline = interp.InterpolatedUnivariateSpline(lnMarr, nu)
-        lnM_nu_spline = interp.InterpolatedUnivariateSpline(nu, lnMarr)
         biases = Extra.bias[self.snapshot]
         bias_spline = interp.InterpolatedUnivariateSpline(lnMarr, biases)
         bias = bias_spline(np.log(M))
@@ -54,57 +56,40 @@ class SingleSnapshotFitter(object):
         Omega_b = self.cosmology[0]/h**2
         Omega_m = self.cosmology[1]/h**2
         ns = self.cosmology[3]
-        concentrations = np.array([ct.concentration.concentration_at_M(Mi, k, P, ns, Omega_b, Omega_m, h, Mass_type="mean") for Mi in Marr])
-        c_nu_spline = interp.InterpolatedUnivariateSpline(nu, concentrations)
-        c_lnM_spline = interp.InterpolatedUnivariateSpline(lnMarr, concentrations)
+
         #Assemble an args dictionary
         args = {"r":np.ascontiguousarray(r), "xihm":xihm,
                 "cov":cov, "icov":icov,
                 "xi_nl":np.ascontiguousarray(xi_nl),
-                "numin":nu[0], "numax":nu[-1], "bias":bias,
-                "nu_lnM_spline":nu_lnM_spline, "lnM_nu_spline":lnM_nu_spline,
-                "c_nu_spline":c_nu_spline, "c_lnM_spline":c_lnM_spline,
-                "lnMmin":lnMarr[0], "lnMmax":lnMarr[-1]}
+                "bias":bias}
         return args
         
     def lnlike(self, params, M, r, xihm, icov, args):
-        #Also has the prior
-        conc, rt, beta, nua, nub = np.exp(params)
-        if nua < nub:
+        if self.fit_in_log:
+            conc, alpha, rt, beta, r_eff, beta_eff, r_A, r_B, beta_ex = \
+                np.exp(params)
+        else:
+            conc, alpha, rt, beta, r_eff, beta_eff, r_A, r_B, beta_ex = \
+                params
+
+        #Prior is implemented here
+        if conc < .1 or alpha < .01 or rt < 0.1 or r_eff < 0.1:
+            print("first prior violated")
+            return -1e99
+        if beta < 0.01 or beta_eff < 0.01 or beta_ex < 0.01:
+            print("second prior violated")
+            return -1e99
+        if r_A < r_B or r_B < 0.1 or r_A > 10:
+            print("in here", r_A, r_B)
             return -1e-99
-        if nub < args["numin"]:
-            return -1e99
-        if nua > args["numax"]:
-            return -1e99
-        c_nu_spline = args["c_nu_spline"]
-        lnM_nu_spline = args["lnM_nu_spline"]
-        Ma = np.exp(lnM_nu_spline(nua))
-        Mb = np.exp(lnM_nu_spline(nub))
-        ca = c_nu_spline(nua)
-        cb = c_nu_spline(nub)
-        """
-        conc, rt, beta, Ma, Mb = np.exp(params)
-        if any(params[-2:] < args["lnMmin"]):
-            return -1e99
-        if any(params[-2:] > args["lnMmax"]):
-            return -1e99
-        if Ma < Mb:
-            return -1e99
-        c_lnM_spline = args["c_lnM_spline"]
-        ca = c_lnM_spline(np.log(Ma))
-        cb = c_lnM_spline(np.log(Mb))
-        """
+        
         bias = args["bias"]
         xi_nl = args["xi_nl"]
         Omega_m = self.Omega_m
-        #print "%e"%M
-        #print conc, rt, beta, bias
-        #print "%e"%Ma, ca, "%e"%Mb, cb
-        #print Omega_m
-        #exit()
-        xi_ex = ct.exclusion.xi_hm_exclusion_at_r(r, M, conc, rt, beta, Ma, ca,
-                                                  Mb, cb, bias, xi_nl, Omega_m,
-                                                  exclusion_scheme=0)
+        xi_ex = ct.exclusion.xi_hm_exclusion_at_r(r, M, conc, alpha, rt, beta,
+                                                  r_eff, beta_eff,
+                                                  r_A, r_B, beta_ex, bias,
+                                                  xi_nl, Omega_m)
         X = xihm - xi_ex
         return -0.5*np.dot(X, np.dot(icov, X))
         
@@ -121,19 +106,37 @@ class SingleSnapshotFitter(object):
         cov = self.data_dict["covs_all"][mass_index]
         icov = np.linalg.inv(cov)
         args = self.setup_fitting_args(mass_index)
-        nu_lnM_spline = args["nu_lnM_spline"]
+        #nu_lnM_spline = args["nu_lnM_spline"]
             
         def lnprob(pars, M, r, xihm, icov, args):
             return self.lnlike(pars, M, r, xihm, icov, args)
 
-        #Parameters are log of: conc., r_t, beta, nu_a, nu_b
-        guess = np.log([8., 2.67, 3.92,
-                                 nu_lnM_spline(np.log(M*5.)),
-                                 nu_lnM_spline(np.log(M/2.))])
-        #guess = np.log([8.06, 2.67, 3.92, M*5, M/2.])
-        nll = lambda *args: -lnprob(*args)
-        result = op.minimize(nll, guess, args=(M,r,xihm,icov,args),
-                             method="Nelder-Mead")
+        #Parameters are log of:conc, alpha, rt, beta, r_eff, beta_eff, r_A, r_B, beta_ex
+        if self.fit_in_log:
+            guess = np.log(np.array([6.5, #conc
+                                     0.18, #alpha
+                                     1.8, #rt
+                                     0.25, #beta
+                                     1.6, #r_eff
+                                     0.7, #beta_eff
+                                     1.8, #r_A
+                                     0.6, #r_B
+                                     0.28, #beta_ex
+            ]))
+        else:
+            guess = np.array([6.5, #conc
+                              0.18, #alpha
+                              1.8, #rt
+                              0.25, #beta
+                              1.6, #r_eff
+                              0.7, #beta_eff
+                              1.8, #r_A
+                              0.6, #r_B
+                              0.28, #beta_ex
+            ])
+        result = op.minimize(lambda *args: -lnprob(*args),
+                             guess, args=(M,r,xihm,icov,args),
+                             method=method)
         if not quiet:
             print result
 
@@ -151,38 +154,37 @@ class SingleSnapshotFitter(object):
     def get_bestfit_model(self, mass_index, bfoutpath=None):
         if bfoutpath is None:
             bfoutpath = "bestfit_values_Box%d_Z%d.npy"%(self.box, self.snapshot)
-        #conc, rt, beta, Ma, Mb = np.exp(np.load(bfoutpath))
-        conc, rt, beta, nua, nub = np.exp(np.load(bfoutpath)[mass_index])
+        if self.fit_in_log:
+            conc, alpha, rt, beta, r_eff, beta_eff, r_A, r_B, beta_ex = \
+                np.exp(np.load(bfoutpath)[mass_index])
+        else:
+            conc, alpha, rt, beta, r_eff, beta_eff, r_A, r_B, beta_ex = \
+                np.load(bfoutpath)[mass_index]
         args = self.setup_fitting_args(mass_index)
         M = self.data_dict["masses"][mass_index]
         Extra = self.extras
-        r = Extra.r
-        xi_nl = Extra.xi_nl[self.snapshot]
-        c_lnM_spline = args["c_lnM_spline"]
-        
-        c_nu_spline = args["c_nu_spline"]
-        lnM_nu_spline = args["lnM_nu_spline"]
-        Ma = np.exp(lnM_nu_spline(nua))
-        Mb = np.exp(lnM_nu_spline(nub))
-        ca = c_nu_spline(nua)
-        cb = c_nu_spline(nub)
-        #ca = c_lnM_spline(np.log(Ma))
-        #cb = c_lnM_spline(np.log(Mb))
+        #r = Extra.r
+        r = args["r"]
+        xi_nl = args["xi_nl"]
         bias = args["bias"]
         Omega_m = self.Omega_m
 
-        xi_ex = ct.exclusion.xi_hm_exclusion_at_r(r, M, conc, rt, beta, Ma, ca,
-                                                  Mb, cb, bias, xi_nl, Omega_m,
-                                                  exclusion_scheme=0)
+        xi_ex = ct.exclusion.xi_hm_exclusion_at_r(r, M, conc, alpha, rt, beta,
+                                                  r_eff, beta_eff,
+                                                  r_A, r_B, beta_ex, bias,
+                                                  xi_nl, Omega_m)
+        #xi_ex = args["xi_nl"] * args["bias"]
         return r, xi_ex
         
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     for zi in range(9, 10):
-        f = SingleSnapshotFitter(0, zi)
+        f = SingleSnapshotFitter(0, zi, True)
         NM = len(f.data_dict["masses"])
-        for i in range(0, NM):
-            #f.perform_best_fit(i)
+        MI = 20
+        for i in range(MI, MI+1):
+#        for i in range(NM):
+            f.perform_best_fit(i)
             fig, ax = plt.subplots(ncols=1, nrows=2, sharex=True)
             r,xi = f.get_bestfit_model(i)
             ax[0].loglog(r,xi,zorder=-1,c='b')
@@ -197,9 +199,10 @@ if __name__ == "__main__":
             ax[1].axhline(0, ls='--', c='k')
             yl = 20
             ax[1].set_ylim((-yl, yl))
-            ax[1].set_xlim((rd[0], rd[-1]))
+            #ax[1].set_xlim((rd[0], rd[-1]))
             ax[0].set_title("box%d Z%d M%d"%(0,zi,i))
             fig.savefig("figs/box%d_Z%d_M%d.png"%(0,zi,i))
+            plt.show()
             plt.cla()
             plt.clf()
             plt.close()
