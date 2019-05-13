@@ -250,6 +250,9 @@ class SingleSnapshotFitter(object):
         
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
+    plt.rc("text", usetex=True)
+    plt.rc("font", size=24, family="serif")
+    plt.rc("errorbar", capsize=2)
     box = 0
     for box in range(box, box+1):
         for zi in range(9,10):
@@ -258,10 +261,11 @@ if __name__ == "__main__":
             MI = 10
             for i in range(MI, MI+1):
             #for i in range(NM):
-                f.perform_best_fit(i)
-                f.perform_mcmc(i)
+                #f.perform_best_fit(i)
+                #f.perform_mcmc(i)
 
                 fig, ax = plt.subplots(ncols=1, nrows=2, sharex=True)
+                plt.subplots_adjust(hspace=0)
                 #r,xi = f.get_bestfit_model(i)
                 r,xi = f.get_MAP_model(i)
                 ax[0].loglog(r,xi,zorder=-1,c='b')
@@ -269,16 +273,29 @@ if __name__ == "__main__":
                 xihm = f.data_dict["xihm_all"][i]
                 cov = f.data_dict["covs_all"][i]
                 err = np.sqrt(cov.diagonal())
-                ax[0].errorbar(rd, xihm, err, c='k', zorder=0)
+                ax[0].errorbar(rd, xihm, err, c='k', marker='.', zorder=0)
                 xim_spl = interp.InterpolatedUnivariateSpline(r, xi)
                 xim = xim_spl(rd) #model at the data radii
-                ax[1].errorbar(rd, 100*(xihm-xim)/xim, 100*err/xim, c='b', ls='')
+                ax[1].errorbar(rd, 100*(xihm-xim)/xim, 100*err/xim, c='b',
+                               marker='.', ls='')
                 ax[1].axhline(0, ls='--', c='k')
-                yl = 20
+                #ax[0].set_yticks([.01, .1, 1, 10, 100, 1000])
+                #ax[0].set_yticklabels([.1, 1, 10, 100, 1000])
+                ax[0].set_ylabel(r"$\xi_{\rm hm}(r,M)$")
+                ax[1].set_ylabel(r"$\Delta\ [\%]$")
+                ax[1].set_xlabel(r"$r\ [h^{-1}{\rm Mpc}]$")
+
+                yl = 21
                 ax[1].set_ylim((-yl, yl))
                 #ax[1].set_xlim((rd[0], rd[-1]))
-                ax[0].set_title("box%d Z%d M%d"%(box,zi,i))
-                fig.savefig("figs/box%d_Z%d_M%d.png"%(box,zi,i))
+                #ax[0].set_title("box%d Z%d M%d"%(box,zi,i))
+                M = f.data_dict["masses"][i]
+                z = f.z
+                ax[0].text(.09, .03, "$M=4e13\ [h^{-1}\mathrm{M_\odot}]$", transform=ax[0].transAxes)
+                ax[0].text(.09, 0.25, "$z=%.0f$"%(z), transform=ax[0].transAxes)
+                #ax[0].set_title(r"$M=%.1e$"%(z,M))
+
+                fig.savefig("figs/box%d_Z%d_M%d.png"%(box,zi,i), dpi=300, bbox_inches="tight")
                 plt.show()
                 plt.cla()
                 plt.clf()
