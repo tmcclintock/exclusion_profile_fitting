@@ -2,6 +2,7 @@
 *.npy
 
 # datafiles that aren't public yet
+datafiles/*.npy
 profile_fitter/datafiles/*npy
 
 # emacs backup files
